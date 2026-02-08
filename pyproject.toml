@@ -1,32 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "scrapyd-logparser"
-version = "0.1.0-beta"
+version = "0.1.0-b1"
 description = "A tool to parse Scrapyd logs for detailed statistics."
 readme = "README.md"
+authors = [{ name = "Jalil SA"}]
+license = {text = "MIT"}
 requires-python = ">=3.9"
+keywords = ["scrapyd", "logs", "parser", "statistics", "web-scraping", "scrapy"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = []
 
 [project.optional-dependencies]
 dev = [
-    "black",
-    "isort",
-    "pre-commit",
+    "pytest>=7.0.0",
+    "black>=24.1.1",
+    "isort>=5.13.2",
+    "pre-commit>=3.0.0",
 ]
 
 [project.scripts]
 scrapyd-logparser = "logparser.cli:main"
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.wheel]
-packages = ["logparser"]
+[project.urls]
+Homepage = "https://github.com/jxlil/scrapyd-logparser"
 
 [tool.black]
-line-length = 88
-target-version = ['py39']
+line-length = 100
 
 [tool.isort]
 profile = "black"
-line_length = 88
+line_length = 100
+
+[tool.hatch.build.targets.wheel]
+packages = ["logparser"]

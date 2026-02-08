@@ -1,13 +1,51 @@
 import argparse
+import json
+import logging
 import os
 import sys
+import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+from logparser.parser import LogParser
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Parse Scrapyd logs for statistics.")
+    parser.add_argument("log_dir", type=str, help="Path to the directory containing Scrapyd logs")
     parser.add_argument(
-        "log_dir", type=str, help="Path to the directory containing Scrapyd logs"
+        "--output",
+        "-o",
+        type=str,
+        default=None,
+        help="Output summary JSON file path",
+    )
+    parser.add_argument(
+        "--force",
+        "-f",
+        action="store_true",
+        help="Force re-parsing of all files, ignoring existing summary",
+    )
+    parser.add_argument(
+        "--interval",
+        "-i",
+        type=int,
+        default=5,
+        help="Interval in seconds to run the parser in a loop. Default 5 (run once).",
+    )
+    parser.add_argument(
+        "--json-dir",
+        type=str,
+        default=None,
+        help="Directory to store parsed JSON files. Follows project/spider structure. If not set, saves alongside logs.",
     )
     return parser.parse_args()
 
@@ -18,20 +56,17 @@ def find_log_files(log_dir):
     path = Path(log_dir)
 
     if not path.exists():
-        print(f"Error: The directory '{log_dir}' does not exist.")
+        logger.error(f"The directory '{log_dir}' does not exist.")
         return []
 
     if not path.is_dir():
-        print(f"Error: The path '{log_dir}' is not a directory.")
+        logger.error(f"The path '{log_dir}' is not a directory.")
         return []
 
-    print(f"Scanning directory: {path.absolute()}")
+    logger.info(f"Scanning directory: {path.absolute()}")
 
     for root, _, files in os.walk(path):
         for file in files:
-            # Assuming logs are files. We might want to filter by .log extension later
-            # but usually scrapyd logs end in .log so let's check for likely candidates
-            # or just take everything for now as requested "read all logs".
             if file.endswith(".log") or file.endswith(".txt"):
                 file_path = Path(root) / file
                 log_files.append(file_path)
@@ -39,36 +74,277 @@ def find_log_files(log_dir):
     return log_files
 
 
-from itertools import islice
+def cleanup_orphans(log_dir, exclude_files=None):
+    """Remove valid JSON stats files that no longer have a corresponding log file."""
+    if exclude_files is None:
+        exclude_files = set()
+
+    logger.info(f"Scanning for orphaned JSON files in: {log_dir}")
+    removed_count = 0
+    log_dir_path = Path(log_dir).absolute()
+    scrapydlogparser_dir = log_dir_path / "scrapydlogparser"
+
+    if not log_dir_path.exists():
+        return
+
+    # Walk the directory
+    for root, dirs, files in os.walk(log_dir_path):
+        root_path = Path(root)
+
+        for file in files:
+            if not file.endswith(".json"):
+                continue
+
+            json_path = root_path / file
+
+            # Skip excluded files
+            if str(json_path.absolute()) in exclude_files:
+                continue
+
+            # Determine potential log path
+            log_candidates = []
+
+            # Check if inside scapydlogparser directory (New Structure)
+            # We ONLY cleanup JSONs in scrapydlogparser_dir
+            try:
+                if (
+                    scrapydlogparser_dir in json_path.parents
+                    or scrapydlogparser_dir == json_path.parent
+                ):
+                    rel_path = json_path.relative_to(scrapydlogparser_dir)
+                    # Map back to source structure: logs/scrapydlogparser/project/spider/job.json -> logs/project/spider/job.log
+                    cand_log = log_dir_path / rel_path.with_suffix(".log")
+                    log_candidates.append(cand_log)
+                    log_candidates.append(log_dir_path / rel_path.with_suffix(".txt"))
+                else:
+                    # Ignore JSONs outside scrapydlogparser to avoid deleting other library files
+                    continue
+            except ValueError:
+                # Fallback if path manipulation fails
+                continue
+
+            # Check if any candidate exists
+            found = False
+            for cand in log_candidates:
+                if cand.exists():
+                    found = True
+                    break
+
+            if not found:
+                try:
+                    json_path.unlink()
+                    removed_count += 1
+                    # logger.debug(f"Removed orphan: {json_path}")
+                except Exception as e:
+                    logger.error(f"Error removing orphan {json_path}: {e}")
+
+    if removed_count > 0:
+        logger.info(f"Removed {removed_count} orphaned JSON files.")
+    else:
+        logger.info("No orphaned JSON files found.")
 
 
-def read_log_preview(file_path, num_lines=5):
-    """Read the first few lines of a log file to verify we can read it."""
-    try:
-        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-            lines = [line.strip() for line in islice(f, num_lines)]
-        return lines
-    except Exception as e:
-        return [f"Error reading file: {e}"]
+def process_single_file(log_file):
+    """Helper function to run in a separate process."""
+    parser = LogParser(log_file)
+    stats = parser.parse()
+    # It's more efficient to return the object and process saving in the main thread
+    # to avoid file locking issues or complex multiprocessing logic for simple writes,
+    # but for individual files, we can write them here to parallelize I/O.
+    return stats
+
+
+def run_analysis(args):
+    start_time = time.perf_counter()
+
+    # Define output files strictly to avoid deleting them during cleanup
+    if args.output:
+        output_path = Path(args.output).absolute()
+    else:
+        # Default: logs/scrapydlogparser/scrapydlogparser.json
+        log_dir_path = Path(args.log_dir).absolute()
+        output_path = log_dir_path / "scrapydlogparser" / "scrapydlogparser.json"
+
+    # Ensure directory exists
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 1. Clean up orphaned JSON files first
+    cleanup_orphans(args.log_dir, exclude_files={str(output_path)})
+
+    log_files = find_log_files(args.log_dir)
+
+    if not log_files:
+        logger.warning("No log files found.")
+        return
+
+    summary_results = {}
+    # output_path is already set above
+
+    # Incremental parsing logic
+    # Incremental parsing logic
+    # Structure: {project_name: [stats_dict, ...]}
+    existing_data_map = {}  # Map log_path -> stats_dict for O(1) lookup
+    existing_project_structure = {}  # Keep track of existing structure
+
+    if output_path.exists() and not args.force:
+        try:
+            with open(output_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+                # Handle migration from list to dict if needed
+                if isinstance(data, list):
+                    logger.warning(
+                        "Detected old summary format (list). Migrating to project-based grouping."
+                    )
+                    # We will re-group them during processing, but first map them for size check
+                    for entry in data:
+                        existing_data_map[entry["log_path"]] = entry
+                elif isinstance(data, dict):
+                    existing_project_structure = data
+                    for project, entries in data.items():
+                        for entry in entries:
+                            existing_data_map[entry["log_path"]] = entry
+
+            logger.info(f"Loaded {len(existing_data_map)} existing entries from summary.")
+        except Exception as e:
+            logger.warning(f"Could not read existing summary ({e}). Starting fresh.")
+
+    # Initialize summary_results with existing structure or empty dict
+    # We will rebuild it to ensure clean state but reusing unchanged entries
+    summary_results = {}
+
+    files_to_process = []
+    skipped_count = 0
+
+    if args.force:
+        files_to_process = log_files
+        logger.info("Force mode enabled: reprocessing all files.")
+        summary_results = {}  # Clear everything on force
+    else:
+        for log_file in log_files:
+            abs_path = str(log_file.absolute())
+            if abs_path in existing_data_map:
+                # Check if file size has changed
+                try:
+                    current_size = log_file.stat().st_size
+                    existing_entry = existing_data_map[abs_path]
+
+                    if current_size == existing_entry.get("size", -1):
+                        skipped_count += 1
+
+                        # Add unchanged entry to summary_results
+                        project = existing_entry.get("project", "unknown")
+                        if project not in summary_results:
+                            summary_results[project] = []
+                        summary_results[project].append(existing_entry)
+
+                        continue
+                except OSError:
+                    pass
+
+            files_to_process.append(log_file)
+
+        if skipped_count > 0:
+            logger.info(f"Skipping {skipped_count} unchanged files.")
+
+    if not files_to_process:
+        logger.info("No new or modified files to process.")
+    else:
+        logger.info(f"Processing {len(files_to_process)} files with ProcessPoolExecutor...")
+
+    # Use ProcessPoolExecutor to utilize all CPU cores
+    with ProcessPoolExecutor() as executor:
+        # Submit all tasks
+        future_to_file = {executor.submit(process_single_file, f): f for f in files_to_process}
+
+        # Collect results as they complete
+        for i, future in enumerate(as_completed(future_to_file)):
+            try:
+                stats = future.result()
+
+                # Append to summary grouped by project
+                project = stats.project
+                if project not in summary_results:
+                    summary_results[project] = []
+                summary_results[project].append(stats.to_summary_dict())
+
+                # Save individual detail file
+                if args.json_dir:
+                    base_dir = Path(args.json_dir)
+                    # Use project/spider structure from stats or path
+                    # We can use stats.project and stats.spider which are extracted reliably
+
+                    target_dir = base_dir / stats.project / stats.spider
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    json_path = target_dir / f"{stats.job}.json"
+
+                    # Update json_path in stats object so the summary points to the correct location?
+                    # The summary usually contains "log_path". Should we add "json_path"?
+                    # The current to_summary_dict() doesn't verify json path, backend assumes it relative to log?
+                    # Actually, scrapyd-view constructs URL based on project/spider/runKey.json.
+                    # If we change location, we might break scrapyd-view unless it knows the new prefix.
+                else:
+                    log_path = Path(stats.log_path)
+                    # Resolve root_log_dir relative to the execution or passed arg
+                    root_log_dir = Path(args.log_dir).absolute()
+
+                    try:
+                        rel_path = log_path.relative_to(root_log_dir)
+                    except ValueError:
+                        # Fallback: construct path using project/spider/job.json if available
+                        if stats.project != "unknown" and stats.spider != "unknown":
+                            rel_path = Path(stats.project) / stats.spider / log_path.name
+                        else:
+                            # Last resort: just the filename
+                            rel_path = Path(log_path.name)
+
+                    target_dir = root_log_dir / "scrapydlogparser" / rel_path.parent
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    json_path = target_dir / log_path.with_suffix(".json").name
+
+                # Actualizamos stats.json_path si queremos rastrearlo (opcional, LogStats no tiene ese campo explicito en init pero to_dict lo usa?)
+                # LogStats no tiene json_path en __init__, pero podemos agregarlo dinámicamente si fuera necesario.
+
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(stats.to_dict(), f, indent=2)
+
+            except Exception as e:
+                logger.error(f"Error processing file: {e}")
+
+            # Simple progress indicator
+            if (i + 1) % 100 == 0:
+                logger.info(f"Processed {i + 1}/{len(files_to_process)} files...")
+
+    # output_path is already defined at start of function
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(summary_results, f, indent=4)
+
+    end_time = time.perf_counter()
+    duration = end_time - start_time
+
+    # Calculate total count from values lists
+    total_parsed = sum(len(items) for items in summary_results.values())
+
+    logger.info(f"\nSuccessfully parsed {total_parsed} logs in {duration:.4f} seconds.")
+
+    logger.info(f"Summary saved to: {output_path.absolute()}")
 
 
 def main():
     args = parse_args()
-    log_files = find_log_files(args.log_dir)
 
-    if not log_files:
-        print("No log files found.")
-        return
+    if args.interval > 0:
+        logger.info(f"Running in loop mode. Interval: {args.interval} seconds.")
+        while True:
+            try:
+                run_analysis(args)
+            except Exception as e:
+                logger.error(f"Error in analysis loop: {e}")
 
-    print(f"Found {len(log_files)} log file(s).")
-
-    for log_file in log_files:
-        print(f"\n--- Reading: {log_file} ---")
-        preview = read_log_preview(log_file)
-        for line in preview:
-            print(line)
-        if len(preview) == 0:
-            print("(File is empty)")
+            logger.info(f"Sleeping for {args.interval} seconds...")
+            time.sleep(args.interval)
+    else:
+        run_analysis(args)
 
 
 if __name__ == "__main__":

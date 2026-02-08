@@ -7,6 +7,7 @@ This project aims to parse Scrapyd logs to generate detailed statistics, providi
 ### Features
 
 - **Project Structure**: Standard Python project structure.
+- **High Performance**: Uses `ProcessPoolExecutor` to parse logs in parallel, utilizing all CPU cores.
 - **Log Discovery**: Recursively finds all log files in a specified directory.
 - **CLI**: Basic command-line interface to point to a log directory.
 
@@ -20,15 +21,21 @@ This project aims to parse Scrapyd logs to generate detailed statistics, providi
 
 2. **Run the parser**:
 
+   ````bash
    ```bash
-   scrapyd-logparser /path/to/scrapyd/logs
-   ```
+   scrapyd-logparser /path/to/scrapyd/logs --json-dir /path/to/json/output
+   ````
 
    Or directly via python:
 
    ```bash
-   python3 logparser/cli.py /path/to/scrapyd/logs
+   python3 logparser/cli.py /path/to/scrapyd/logs [options]
    ```
+
+   **Options:**
+   - `--json-dir`: Directory to store parsed JSON files. Follows `project/spider/job.json` structure.
+   - `--output`: Output summary JSON file path.
+   - `--force`: Force re-parsing of all files.
 
 3. **Code Formatting (Dev)**:
    This project uses `black` and `isort` via `pre-commit`.
