@@ -38,8 +38,8 @@ def parse_args():
         "--interval",
         "-i",
         type=int,
-        default=5,
-        help="Interval in seconds to run the parser in a loop. Default 5 (run once).",
+        default=0,
+        help="Interval in seconds to run the parser in a loop. Default 0 (run once).",
     )
     parser.add_argument(
         "--json-dir",

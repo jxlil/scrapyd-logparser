@@ -3,7 +3,7 @@ from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 @dataclass
@@ -32,6 +32,7 @@ class LogStats:
         }
     )
     host_info: Dict[str, str] = field(default_factory=dict)
+    crawler_stats: Dict[str, Any] = field(default_factory=dict)
     head: str = ""
     tail: str = ""
 
@@ -113,9 +114,12 @@ class LogParser:
     _UNHANDLED_ERROR_PATTERN = re.compile(r"CRITICAL: Unhandled error in Deferred")
     _TELNET_PATTERN = re.compile(r"Telnet console listening on (.*)")
     _SCRAPY_VERSION_PATTERN = re.compile(r"Scrapy (\d+\.\d+\.\d+) started")
+    _DUMP_STATS_START_PATTERN = re.compile(r"Dumping Scrapy stats:")
+    _DUMP_STATS_LINE_PATTERN = re.compile(r"^\s*\{?'([^']+)':\s*(.*?)[,}]?$")
 
     def __init__(self, file_path: Path):
         self.file_path = file_path
+        self._in_stats_dump = False
 
     def parse(self) -> LogStats:
         # Assuming structure: .../{project}/{spider}/{job}.log
@@ -194,6 +198,9 @@ class LogParser:
                         "items_rate": items_rate,
                     }
                 )
+                # Also update current totals for immediate feedback
+                stats.pages = max(stats.pages, pages_count)
+                stats.items = max(stats.items, items_count)
 
         # Match Log Levels and specific events
         level_match = self._LOG_LEVEL_PATTERN.search(line)
@@ -232,12 +239,69 @@ class LogParser:
         # Check for pages
         pages_match = self._PAGES_PATTERN.search(line)
         if pages_match:
-            stats.pages = int(pages_match.group(1))
+            stats.pages = max(stats.pages, int(pages_match.group(1)))
 
-        # Check for item count in stats dump
+        # Check for item count in stats dump (fallback if not in full dump parse)
         items_stats_match = self._DUMP_STATS_ITEMS_PATTERN.search(line)
         if items_stats_match:
-            stats.items = int(items_stats_match.group(1))
+            stats.items = max(stats.items, int(items_stats_match.group(1)))
+
+        # Multi-line stats dump parsing
+        if self._DUMP_STATS_START_PATTERN.search(line):
+            self._in_stats_dump = True
+            return
+
+        if self._in_stats_dump:
+            if "}" in line:
+                # Handle potentially data on the same line as the closing brace
+                if line.strip() != "}":
+                    dump_match = self._DUMP_STATS_LINE_PATTERN.search(line)
+                    if dump_match:
+                        key = dump_match.group(1)
+                        val_str = dump_match.group(2).strip().rstrip(",").rstrip("}")
+                        # Inline type conversion for now to keep it small
+                        try:
+                            if val_str.startswith("'") or val_str.startswith('"'):
+                                val = val_str.strip("'\"")
+                            elif val_str.isdigit():
+                                val = int(val_str)
+                            elif val_str.replace(".", "", 1).isdigit():
+                                val = float(val_str)
+                            else:
+                                val = val_str
+                            stats.crawler_stats[key] = val
+                        except Exception:
+                            stats.crawler_stats[key] = val_str
+
+                self._in_stats_dump = False
+                # Final check for pages and items from the collected crawler_stats
+                if "downloader/response_count" in stats.crawler_stats:
+                    stats.pages = max(
+                        stats.pages,
+                        int(stats.crawler_stats["downloader/response_count"]),
+                    )
+                if "item_scraped_count" in stats.crawler_stats:
+                    stats.items = max(stats.items, int(stats.crawler_stats["item_scraped_count"]))
+                return
+            else:
+                dump_match = self._DUMP_STATS_LINE_PATTERN.search(line)
+                if dump_match:
+                    key = dump_match.group(1)
+                    val_str = dump_match.group(2).strip().rstrip(",")
+
+                    # Basic type conversion
+                    try:
+                        if val_str.startswith("'") or val_str.startswith('"'):
+                            val = val_str.strip("'\"")
+                        elif val_str.isdigit():
+                            val = int(val_str)
+                        elif val_str.replace(".", "", 1).isdigit():
+                            val = float(val_str)
+                        else:
+                            val = val_str
+                        stats.crawler_stats[key] = val
+                    except Exception:
+                        stats.crawler_stats[key] = val_str
 
     def _add_log_category(self, stats: LogStats, category: str, line: str):
         if category in stats.log_categories:
