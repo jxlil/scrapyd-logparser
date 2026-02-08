@@ -1,4 +1,4 @@
-# 🕷️ Scrapyd Log Parser
+# Scrapyd Log Parser
 
 [![Python Version](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -6,16 +6,16 @@
 
 A high-performance tool designed to parse **Scrapyd** logs and generate detailed statistics, providing deep insights that Scrapyd doesn't provide natively.
 
-## ✨ Features
+## Features
 
-- **🚀 High Performance**: Leverages `ProcessPoolExecutor` for parallel log parsing, maximizing CPU utilization.
-- **📁 Organized Output**: Centralizes all parsed JSON data into a dedicated `scrapydlogparser` directory, mirroring your project's structure.
-- **🔄 Loop Mode**: Automatically monitors and re-parses logs at configurable intervals.
-- **🧹 Smart Cleanup**: Automatically removes orphaned JSON files when their corresponding log files are deleted.
-- **📈 Incremental Parsing**: Only processes new or modified logs by checking file size against existing data.
-- **🛡️ Error Detection**: Specifically detects critical unhandled errors and crashes, labeling them for easy identification.
+- **High Performance**: Leverages `ProcessPoolExecutor` for parallel log parsing, maximizing CPU utilization.
+- **Organized Output**: Centralizes all parsed JSON data into a dedicated `scrapydlogparser` directory, mirroring your project's structure.
+- **Loop Mode**: Automatically monitors and re-parses logs at configurable intervals.
+- **Smart Cleanup**: Automatically removes orphaned JSON files when their corresponding log files are deleted.
+- **Incremental Parsing**: Only processes new or modified logs by checking file size against existing data.
+- **Error Detection**: Specifically detects critical unhandled errors and crashes, labeling them for easy identification.
 
-## 🚀 Quick Start
+## Quick Start
 
 ### Installation
 
@@ -48,7 +48,7 @@ By default, this will:
 | `--force`    | `-f`      | Forces a full re-parse of all log files.                   | `Disabled`                                    |
 | `--json-dir` |           | Custom directory to store individual JSON files.           | `logs/scrapydlogparser/`                      |
 
-## 🛠️ Advanced Usage
+## Advanced Usage
 
 ### Continuous Monitoring (Loop Mode)
 
@@ -58,13 +58,7 @@ To keep your statistics updated in real-time (e.g., every 60 seconds):
 scrapyd-logparser ./logs --interval 60
 ```
 
-### Manual execution via Python
-
-```bash
-python3 -m logparser.cli ./logs
-```
-
-## 📂 Data Structure
+## Data Structure
 
 The tool transforms your standard Scrapyd logs into a clean, queryable JSON structure:
 
@@ -79,22 +73,3 @@ logs/
         └── spider/
             └── job.json (Detailed stats)
 ```
-
-## 👨‍💻 Development
-
-This project uses `black` and `isort` for code quality.
-
-1. **Setup Pre-commit Hooks**:
-
-   ```bash
-   pre-commit install
-   ```
-
-2. **Run Linting Manually**:
-   ```bash
-   pre-commit run --all-files
-   ```
-
----
-
-Built with ❤️ for the Scrapy community.
