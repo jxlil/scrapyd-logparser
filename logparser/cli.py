@@ -447,12 +447,75 @@ def run_analysis(args):
     }
     stats_output["global"] = global_final
 
-    # Construct final JSON
-    final_output = {"status": "ok", "stats": stats_output, "projects": summary_results}
+    # Save optimized JSONL output
+    output_dir = output_path.parent
 
-    # output_path is already defined at start of function
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(final_output, f, indent=4)
+    # 1. Save stats.json (metadata and statistics)
+    stats_file = output_dir / "stats.json"
+    total_jobs = sum(len(runs) for runs in summary_results.values())
+    active_count = sum(
+        1
+        for runs in summary_results.values()
+        for r in runs
+        if r.get("status") == "running" or r.get("finish_reason") == "N/A"
+    )
+
+    stats_data = {
+        "status": "ok",
+        "stats": stats_output,
+        "total_jobs": total_jobs,
+        "active_count": active_count,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+    with open(stats_file, "w", encoding="utf-8") as f:
+        json.dump(stats_data, f, indent=2)
+
+    # 2. Save active.jsonl (only running jobs)
+    active_file = output_dir / "active.jsonl"
+    with open(active_file, "w", encoding="utf-8") as f:
+        for project, runs in summary_results.items():
+            for run in runs:
+                if run.get("status") == "running" or run.get("finish_reason") == "N/A":
+                    f.write(json.dumps(run) + "\n")
+
+    # 3. Update jobs.jsonl (all jobs, sorted by latest_log_time)
+    jobs_file = output_dir / "jobs.jsonl"
+
+    # Read existing jobs to preserve history
+    existing_jobs = {}
+    if jobs_file.exists():
+        try:
+            with open(jobs_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        job = json.loads(line)
+                        job_key = f"{job.get('project', 'unknown')}-{job.get('spider', 'unknown')}-{job.get('job', 'unknown')}"
+                        existing_jobs[job_key] = job
+        except Exception as e:
+            logger.warning(f"Could not read existing jobs.jsonl: {e}")
+
+    # Update with current data
+    for project, runs in summary_results.items():
+        for run in runs:
+            job_key = f"{run.get('project', 'unknown')}-{run.get('spider', 'unknown')}-{run.get('job', 'unknown')}"
+            existing_jobs[job_key] = run
+
+    # Sort by latest_log_time (newest first)
+    all_jobs = sorted(
+        existing_jobs.values(),
+        key=lambda x: x.get("latest_log_time") or x.get("last_update_time") or "",
+        reverse=True,
+    )
+
+    # Write sorted jobs
+    with open(jobs_file, "w", encoding="utf-8") as f:
+        for job in all_jobs:
+            f.write(json.dumps(job) + "\n")
+
+    # Also keep the old scrapydlogparser.json for backward compatibility (optional)
+    # with open(output_path, "w", encoding="utf-8") as f:
+    #     json.dump({"status": "ok", "stats": stats_output, "projects": summary_results}, f, indent=4)
 
     end_time = time.perf_counter()
     duration = end_time - start_time
@@ -461,8 +524,14 @@ def run_analysis(args):
     total_parsed = sum(len(items) for items in summary_results.values())
 
     logger.info(f"\nSuccessfully parsed {total_parsed} logs in {duration:.4f} seconds.")
-
-    logger.info(f"Summary saved to: {output_path.absolute()}")
+    logger.info(f"\nOptimized output saved:")
+    logger.info(f"  - stats.json: {stats_file.stat().st_size / 1024:.1f} KB")
+    logger.info(
+        f"  - active.jsonl: {active_file.stat().st_size / 1024:.1f} KB ({active_count} jobs)"
+    )
+    logger.info(
+        f"  - jobs.jsonl: {jobs_file.stat().st_size / 1024:.1f} KB ({len(all_jobs)} total jobs)"
+    )
 
 
 def main():
