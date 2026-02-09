@@ -211,33 +211,34 @@ def run_analysis(args):
     # output_path is already set above
 
     # Incremental parsing logic
-    # Incremental parsing logic
-    # Structure: {project_name: [stats_dict, ...]}
+    # Read from jobs.jsonl instead of scrapydlogparser.json
     existing_data_map = {}  # Map log_path -> stats_dict for O(1) lookup
     existing_project_structure = {}  # Keep track of existing structure
 
-    if output_path.exists() and not args.force:
+    # Use jobs.jsonl for incremental parsing
+    jobs_jsonl_path = output_path.parent / "jobs.jsonl"
+
+    if jobs_jsonl_path.exists() and not args.force:
         try:
-            with open(output_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            with open(jobs_jsonl_path, "r", encoding="utf-8") as f:
+                line_count = 0
+                for line in f:
+                    if line.strip():
+                        entry = json.loads(line)
+                        log_path = entry.get("log_path")
+                        if log_path:
+                            existing_data_map[log_path] = entry
 
-                # Handle migration from list to dict if needed
-                if isinstance(data, list):
-                    logger.warning(
-                        "Detected old summary format (list). Migrating to project-based grouping."
-                    )
-                    # We will re-group them during processing, but first map them for size check
-                    for entry in data:
-                        existing_data_map[entry["log_path"]] = entry
-                elif isinstance(data, dict):
-                    existing_project_structure = data
-                    for project, entries in data.items():
-                        for entry in entries:
-                            existing_data_map[entry["log_path"]] = entry
+                            # Build project structure
+                            project = entry.get("project", "unknown")
+                            if project not in existing_project_structure:
+                                existing_project_structure[project] = []
+                            existing_project_structure[project].append(entry)
+                        line_count += 1
 
-            logger.info(f"Loaded {len(existing_data_map)} existing entries from summary.")
+            logger.info(f"Loaded {len(existing_data_map)} existing entries from jobs.jsonl.")
         except Exception as e:
-            logger.warning(f"Could not read existing summary ({e}). Starting fresh.")
+            logger.warning(f"Could not read existing jobs.jsonl ({e}). Starting fresh.")
 
     # Initialize summary_results with existing structure or empty dict
     # We will rebuild it to ensure clean state but reusing unchanged entries
