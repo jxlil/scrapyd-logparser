@@ -18,6 +18,36 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def parse_runtime_to_seconds(runtime_str):
+    """Parse runtime string (HH:MM:SS or 'X day(s), HH:MM:SS') into total seconds."""
+    if not runtime_str or runtime_str == "0:00:00":
+        return 0
+
+    try:
+        total_seconds = 0
+
+        # Handle format like "1 day, 20:22:00" or "2 days, 1:23:45"
+        if "day" in runtime_str:
+            day_part, time_part = runtime_str.split(",", 1)
+            # Extract days number
+            days = int(day_part.split()[0])
+            total_seconds += days * 86400  # 86400 seconds in a day
+            runtime_str = time_part.strip()
+
+        # Handle format like "1:23:45" or "0:12:34"
+        parts = runtime_str.split(":")
+        if len(parts) == 3:
+            hours, minutes, seconds = map(int, parts)
+            total_seconds += hours * 3600 + minutes * 60 + seconds
+        elif len(parts) == 2:
+            minutes, seconds = map(int, parts)
+            total_seconds += minutes * 60 + seconds
+
+        return total_seconds
+    except (ValueError, AttributeError):
+        return 0
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Parse Scrapyd logs for statistics.")
     parser.add_argument("log_dir", type=str, help="Path to the directory containing Scrapyd logs")
@@ -348,7 +378,8 @@ def run_analysis(args):
             status = r.get("status")
             crashed = r.get("crashed", False)
             finish_reason = r.get("finish_reason", "N/A")
-            runtime_sec = r.get("runtime_seconds", 0)
+            runtime_str = r.get("runtime", "0:00:00")
+            runtime_sec = parse_runtime_to_seconds(runtime_str)
 
             # Global accumulation
             stats_output["global"]["total_items"] += items

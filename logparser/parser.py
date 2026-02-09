@@ -70,17 +70,8 @@ class LogStats:
                 new_timeline.append(new_entry)
             data["timeline"] = new_timeline
 
-        data["duration"] = self.duration
+        # Set runtime for display (keep this as it's used in frontend)
         data["runtime"] = self.duration
-
-        # Calculate runtime seconds for easier aggregation
-        try:
-            if self.start_time and self.end_time:
-                data["runtime_seconds"] = int((self.end_time - self.start_time).total_seconds())
-            else:
-                data["runtime_seconds"] = 0
-        except:
-            data["runtime_seconds"] = 0
 
         data["status"] = self.status
         data["shutdown_reason"] = "N/A"
