@@ -72,23 +72,36 @@ class LogStats:
 
         data["duration"] = self.duration
         data["runtime"] = self.duration
+
+        # Calculate runtime seconds for easier aggregation
+        try:
+            if self.start_time and self.end_time:
+                data["runtime_seconds"] = int((self.end_time - self.start_time).total_seconds())
+            else:
+                data["runtime_seconds"] = 0
+        except:
+            data["runtime_seconds"] = 0
+
         data["status"] = self.status
         data["shutdown_reason"] = "N/A"
+
+        # Add crashed flag based on critical logs or explicit crash reason
+        critical_count = self.log_categories.get("critical_logs", {}).get("count", 0)
+        data["crashed"] = (critical_count > 0) or (self.finish_reason == "critical_error")
+
         return data
 
     def to_summary_dict(self):
-        """Returns a dictionary without detailed timeline or large text blocks."""
+        """Returns a dictionary without detailed timeline, technical stats or large text blocks."""
         data = self.to_dict()
+
+        # Remove heavy or unnecessary fields for the summary dashboard
         data.pop("timeline", None)
         data.pop("head", None)
         data.pop("tail", None)
-
-        # Simplify log_categories in summary (keep counts, remove details)
-        if "log_categories" in data:
-            summary_cats = {}
-            for cat, info in data["log_categories"].items():
-                summary_cats[cat] = {"count": info.get("count", 0)}
-            data["log_categories"] = summary_cats
+        data.pop("crawler_stats", None)
+        data.pop("host_info", None)
+        data.pop("log_categories", None)
 
         return data
 

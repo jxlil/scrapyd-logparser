@@ -315,9 +315,113 @@ def run_analysis(args):
             if (i + 1) % 100 == 0:
                 logger.info(f"Processed {i + 1}/{len(files_to_process)} files...")
 
+    # Calculate statistics per project and globally
+    stats_output = {
+        "projects": {},
+        "global": {
+            "total_items": 0,
+            "total_pages": 0,
+            "active_spiders": 0,
+            "completed_runs": 0,
+            "successful_runs": 0,
+            "failed_runs": 0,
+            "total_runtime": 0,
+            "runtime_count": 0,
+        },
+    }
+
+    for project, runs in summary_results.items():
+        p_stats = {
+            "total_items": 0,
+            "total_pages": 0,
+            "active_spiders": 0,
+            "completed_runs": 0,
+            "successful_runs": 0,
+            "failed_runs": 0,
+            "total_runtime": 0,
+            "runtime_count": 0,
+        }
+
+        for r in runs:
+            items = r.get("items", 0)
+            pages = r.get("pages", 0)
+            status = r.get("status")
+            crashed = r.get("crashed", False)
+            finish_reason = r.get("finish_reason", "N/A")
+            runtime_sec = r.get("runtime_seconds", 0)
+
+            # Global accumulation
+            stats_output["global"]["total_items"] += items
+            stats_output["global"]["total_pages"] += pages
+
+            # Project accumulation
+            p_stats["total_items"] += items
+            p_stats["total_pages"] += pages
+
+            if status == "running":
+                stats_output["global"]["active_spiders"] += 1
+                p_stats["active_spiders"] += 1
+            else:
+                # Completed runs
+                stats_output["global"]["completed_runs"] += 1
+                p_stats["completed_runs"] += 1
+
+                if not crashed and items > 0:
+                    stats_output["global"]["successful_runs"] += 1
+                    p_stats["successful_runs"] += 1
+                else:
+                    stats_output["global"]["failed_runs"] += 1
+                    p_stats["failed_runs"] += 1
+
+                if runtime_sec > 0:
+                    stats_output["global"]["total_runtime"] += runtime_sec
+                    stats_output["global"]["runtime_count"] += 1
+                    p_stats["total_runtime"] += runtime_sec
+                    p_stats["runtime_count"] += 1
+
+        # Calculate rates and averages for project
+        p_final = {
+            "total_items": p_stats["total_items"],
+            "total_pages": p_stats["total_pages"],
+            "active_spiders": p_stats["active_spiders"],
+            "failed_runs": p_stats["failed_runs"],
+            "success_rate": (
+                round((p_stats["successful_runs"] / p_stats["completed_runs"] * 100), 2)
+                if p_stats["completed_runs"] > 0
+                else 0
+            ),
+            "avg_runtime": (
+                round(p_stats["total_runtime"] / p_stats["runtime_count"], 2)
+                if p_stats["runtime_count"] > 0
+                else 0
+            ),
+        }
+        stats_output["projects"][project] = p_final
+
+    # Calculate global rates and averages
+    g = stats_output["global"]
+    global_final = {
+        "total_items": g["total_items"],
+        "total_pages": g["total_pages"],
+        "active_spiders": g["active_spiders"],
+        "failed_runs": g["failed_runs"],
+        "success_rate": (
+            round((g["successful_runs"] / g["completed_runs"] * 100), 2)
+            if g["completed_runs"] > 0
+            else 0
+        ),
+        "avg_runtime": (
+            round(g["total_runtime"] / g["runtime_count"], 2) if g["runtime_count"] > 0 else 0
+        ),
+    }
+    stats_output["global"] = global_final
+
+    # Construct final JSON
+    final_output = {"status": "ok", "stats": stats_output, "projects": summary_results}
+
     # output_path is already defined at start of function
     with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(summary_results, f, indent=4)
+        json.dump(final_output, f, indent=4)
 
     end_time = time.perf_counter()
     duration = end_time - start_time
